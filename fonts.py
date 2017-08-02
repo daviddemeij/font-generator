@@ -32,7 +32,7 @@ def read_and_decode_single_example(filename_queue):
 def inputs(batch_size=32, reshape_images=True, one_hot=True, num_epochs=None, batch_ids=range(10)):
     filenames = []
     for i in batch_ids:
-        filenames.append("font-batch-" + str(i) + ".tfrecords")
+        filenames.append("font-batch" + str(i) + ".tfrecords")
 
     filename_queue = generate_filename_queue(filenames, dataset_dir, num_epochs=num_epochs)
     label, image = read_and_decode_single_example(filename_queue)

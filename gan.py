@@ -10,7 +10,6 @@ from tensorflow.examples.tutorials.mnist import input_data
 import layers as L
 from tqdm import tqdm
 import time
-from matplotlib import colors
 config_proto = tf.ConfigProto()
 config_proto.gpu_options.allow_growth = True
 
@@ -20,7 +19,7 @@ tf.app.flags.DEFINE_integer('batch_size', 32, "the number of examples in a batch
 tf.app.flags.DEFINE_integer('eval_freq', 250, "The number of iterations until evaluation")
 tf.app.flags.DEFINE_integer('plot_freq', 250, "The number of iterations until evaluation")
 
-tf.app.flags.DEFINE_integer('num_epochs', 30, "the number of epochs for training")
+tf.app.flags.DEFINE_integer('num_epochs', 100, "the number of epochs for training")
 tf.app.flags.DEFINE_integer('dis_per_iter', 1, "the number of training cycles of the discriminator for each iteration")
 tf.app.flags.DEFINE_integer('gen_per_iter', 1, "the number of training cycles of the generator for each iteration")
 
@@ -29,22 +28,27 @@ tf.app.flags.DEFINE_float('mom1', 0.9, "initial momentum rate")
 tf.app.flags.DEFINE_float('mom2', 0.5, "momentum rate after epoch_decay_start")
 tf.app.flags.DEFINE_boolean('dis_bn', True, "use batch norm at discriminator")
 tf.app.flags.DEFINE_boolean('gen_bn', True, "use batch norm at generator")
-tf.app.flags.DEFINE_boolean('method', {'gan', 'cgan', 'acgan', 'infogan'})
+tf.app.flags.DEFINE_string('method', 'cgan', {'gan', 'cgan', 'acgan', 'infogan'})
 tf.app.flags.DEFINE_boolean('wasserstein', True, "use Wasserstein GAN method for improved convergence.")
 tf.app.flags.DEFINE_boolean('gen_dropout', False, "use dropout in the generator.")
-tf.app.flags.DEFINE_string('dataset', 'mnist', '{mnist, fonts}')
+tf.app.flags.DEFINE_string('dataset', 'mnist', '{mnist, fonts, cifar}')
 tf.app.flags.DEFINE_string('experiment_name', 'default', 'experiment name used for logging.')
 tf.app.flags.DEFINE_string('log_dir', '/home/david/training_logs/GAN', 'experiment name used for logging.')
 experiment_dir = FLAGS.log_dir + "/" + FLAGS.experiment_name
-image_dir = experiment_dir + "/images/"
-if not os.path.exists(image_dir):
-    os.makedirs(image_dir)
+image_dir_all_classes = experiment_dir + "/images/all-classes/"
+if not os.path.exists(image_dir_all_classes):
+    os.makedirs(image_dir_all_classes)
+image_dir_fixed_class = experiment_dir + "/images/fixed-class/"
+if not os.path.exists(image_dir_fixed_class):
+    os.makedirs(image_dir_fixed_class)
+
 if FLAGS.dataset == "mnist":
     mnist = input_data.read_data_sets('home/david/datasets/MNIST_data', one_hot=True, reshape=False,  dtype="uint8")
     Z_dim = 128
     X_dim = 28
     y_dim = 10
     h_dim = 128
+    grid = [4, 2]
     num_channels = 1
     iter_per_epoch = 50000 / FLAGS.batch_size
     images = tf.placeholder(tf.float32, shape=[None, 28, 28, 1])
@@ -54,16 +58,18 @@ elif FLAGS.dataset == "fonts":
     X_dim = 64
     y_dim = 62
     h_dim = 256
+    grid = [8, 8]
     num_channels = 1
     iter_per_epoch = 360000 / FLAGS.batch_size
     with tf.device("/cpu:0"):
-        images, labels = fonts.inputs(one_hot=True, batch_size=FLAGS.batch_size, batch_ids=[0])
+        images, labels = fonts.inputs(one_hot=True, batch_size=FLAGS.batch_size, batch_ids=range(10))
 elif FLAGS.dataset == 'cifar10':
     import cifar10
     Z_dim = 128
     X_dim = 32
     y_dim = 10
     h_dim = 256
+    grid = [4, 2]
     num_channels = 3
     iter_per_epoch = 40000 / FLAGS.batch_size
     with tf.device("/cpu:0"):
@@ -142,53 +148,16 @@ def generator(z, y, is_training=True, update_batch_stats=True,
         h = L.conv(h, 5, 1, 32, num_channels, name="conv4")
         h = tf.nn.tanh(h, name="output")
         return h
-"""
-def discriminator(x, y, act_fn=L.lrelu, reuse=True, is_training=True, update_batch_stats=True, bn=FLAGS.dis_bn):
-    with tf.variable_scope('discriminator', reuse=reuse):
-        x = tf.reshape(x, [-1, X_dim*X_dim])
-        xy = tf.concat((x, y), axis=1)
-        h = L.fc(xy, X_dim*X_dim+y_dim, 4*h_dim, name="fc1")
-        h = act_fn(h)
-        h = L.bn(h, 4*h_dim, is_training=is_training, update_batch_stats=update_batch_stats, name="bn1") if bn else h
-        h = L.fc(h, 4*h_dim, 2*h_dim, name="fc2")
-        h = act_fn(h)
-        h = L.bn(h, 2*h_dim, is_training=is_training, update_batch_stats=update_batch_stats, name="bn2") if bn else h
-        h = L.fc(h, 2*h_dim, h_dim, name="fc3")
-        h = act_fn(h)
-        h = L.bn(h, h_dim, is_training=is_training, update_batch_stats=update_batch_stats, name="bn3") if bn else h
-        h = L.fc(h, h_dim, 1, name="fc4")
-        return h
 
-def generator(z, y, act_fn=L.lrelu, reuse=True, is_training=True, update_batch_stats=True, bn=FLAGS.gen_bn):
-    with tf.variable_scope('generator', reuse=reuse):
-        zy = tf.concat((z, y), axis=1)
-        h = L.fc(zy, Z_dim + y_dim, h_dim, name="fc1")
-        h = act_fn(h)
-        h = L.bn(h, h_dim, is_training=is_training, update_batch_stats=update_batch_stats, name="bn1") if bn else h
-        h = L.fc(h, h_dim, 2*h_dim, name="fc2")
-        h = act_fn(h)
-        h = L.bn(h, 2*h_dim, is_training=is_training, update_batch_stats=update_batch_stats, name="bn2") if bn else h
-        h = L.fc(h, 2*h_dim, 4*h_dim, name="fc3")
-        h = act_fn(h)
-        h = L.bn(h, 4*h_dim, is_training=is_training, update_batch_stats=update_batch_stats, name="bn3") if bn else h
-        h = L.fc(h, 4*h_dim, X_dim*X_dim, name="fc4")
-        return tf.nn.tanh(h)
-
-"""
 def sample_Z(m, n):
     return tf.random_normal(shape=[m, n], mean=0., stddev=1.)
 
-def plot(samples, iter=None, title=None):
+def plot(samples, title=None, grid=[8, 8], file_dir=None):
     fig = plt.figure(figsize=(4, 4), facecolor='#edededff')
-
-    if y_dim == 10:
-        gs = gridspec.GridSpec(4, 3)
-    else:
-        gs = gridspec.GridSpec(8, 8)
+    gs = gridspec.GridSpec(grid[0], grid[1])
     gs.update(wspace=0.05, hspace=0.05)
-    if iter is not None:
-        plt.suptitle("Iteration step: %s" % iter)
-
+    if title is not None:
+        plt.suptitle(title)
     for i, sample in enumerate(samples):
         img = (sample + 1.) * 0.5
         ax = plt.subplot(gs[i])
@@ -200,15 +169,33 @@ def plot(samples, iter=None, title=None):
             plt.imshow(img.reshape(X_dim, X_dim, num_channels))
         else:
             plt.imshow(img.reshape(X_dim, X_dim), cmap='Greys_r')
-
+    if file_dir is not None:
+        plt.savefig(file_dir, bbox_inches='tight', transparent=False, facecolor='#edededff')
+        plt.close(fig)
     return fig
 
 
 Z = sample_Z(FLAGS.batch_size, Z_dim)
-Z_fixed = tf.constant(np.random.uniform(-1., 1., size=(y_dim, Z_dim)).astype("float32"))
+Z_fixed = tf.constant(np.random.normal(size=(y_dim, Z_dim)).astype("float32"))
 labels_fixed = tf.one_hot(tf.cast(tf.range(0, y_dim), tf.int32), y_dim)
 
-G_fixed = generator(Z_fixed, labels_fixed, reuse=None, bn=FLAGS.gen_bn, is_training=False, update_batch_stats=False)
+x = np.linspace(-1., 1., 8)
+xv, yv = np.meshgrid(x, x)
+#xv = np.reshape(xv, (8, 8, 1))
+#yv = np.reshape(yv, (8, 8, 1))
+yv = np.array([yv, ]*(Z_dim/2))
+xv = np.array([xv, ]*(Z_dim/2))
+Z_meshgrid = tf.constant(np.reshape(np.concatenate((xv, yv), axis=0), (Z_dim, 64)).transpose().astype("float32"))
+
+#fixed_noise = np.array([np.random.normal(size=(Z_dim)),]*64)
+#fixed_noise_range = np.reshape(np.concatenate((xv, yv), axis=2), (64, 2))
+#Z_meshgrid = tf.constant(np.concatenate((fixed_noise[:, :Z_dim-2], fixed_noise_range), axis=1).astype("float32"))
+#Z_fixed = tf.constant(fixed_noise[:y_dim].astype("float32"))
+
+labels_ones = tf.one_hot(tf.cast(tf.ones([y_dim+2]), tf.int32), y_dim)
+
+G_fixed = generator(Z_fixed, labels_fixed, reuse=None, is_training=False, update_batch_stats=False)
+G_meshgrid = generator(Z_meshgrid, labels_ones, is_training=False, update_batch_stats=False)
 G_sample = generator(Z, labels, bn=FLAGS.gen_bn)
 
 logit_real = discriminator(images, labels, reuse=None)
@@ -225,7 +212,7 @@ if FLAGS.wasserstein:
     G_loss = - logit_fake_mean
 
     # theta_D is list of D's params
-    clip_D = [p.assign(tf.clip_by_value(p, -0.01, 0.01)) for p in dis_params]
+    clip_D = [p.assign(tf.clip_by_value(p, -0.05, 0.05)) for p in dis_params]
 
     D_solver = (tf.train.RMSPropOptimizer(learning_rate=FLAGS.lr)
                 .minimize(D_loss, var_list=dis_params))
@@ -242,6 +229,9 @@ else:
     D_solver = tf.train.AdamOptimizer().minimize(D_loss, var_list=dis_params)
     G_solver = tf.train.AdamOptimizer().minimize(G_loss, var_list=gen_params)
 
+global_step = tf.get_variable(name="global_step", shape=[], dtype=tf.float32,
+            initializer=tf.constant_initializer(0.0), trainable=False)
+
 tf.summary.scalar("Avg_Logit_real", logit_real_mean)
 tf.summary.scalar("Avg_Logit_fake", logit_fake_mean)
 
@@ -254,67 +244,91 @@ tf.summary.image('fake', G_sample)
 
 merged_summary_op = tf.summary.merge_all()
 init_op = tf.global_variables_initializer()
-
+global_step_op = global_step.assign_add(1.)
 # Create TF session and initialise variables
-sess = tf.Session(config=config_proto)
-sess.run(tf.global_variables_initializer())
+saver = tf.train.Saver(tf.global_variables())
+sv = tf.train.Supervisor(
+    is_chief=True,
+    logdir=experiment_dir + "/saved_sessions/",
+    init_op=init_op,
+    init_feed_dict={},
+    saver=saver,
+    global_step=global_step,
+    summary_op=None,
+    summary_writer=None,
+    save_model_secs=150, recovery_wait_secs=0)
 summary_writer = tf.summary.FileWriter(experiment_dir, graph=tf.get_default_graph())
-feed_dict = {}
-real_images = []
+with sv.managed_session(config=config_proto) as sess:
+    feed_dict = {}
+    with tf.device("/cpu:0"):
+        tf.train.start_queue_runners(sess=sess)
+    with tf.device("/gpu:0"):
+        real_images = []
+        l = 0
+        while len(real_images) < y_dim:
+            if FLAGS.dataset == "mnist":
+                img, lab = mnist.train.next_batch(FLAGS.batch_size)
+            else:
+                img, lab = sess.run([images, labels])
+            for i in range(img.shape[0]):
+                if len(real_images) < y_dim:
+                    label = np.argmax(lab[i, :]).astype("int32")
+                    if label == l:
+                        real_images.append(img[i])
+                        l += 1
+        fig = plot(real_images, title="sample of real images for each class", grid=grid)
+        file_name = FLAGS.dataset + "-REAL_IMAGES.jpg"
+        plt.savefig(image_dir_all_classes + file_name, bbox_inches='tight', facecolor='#edededff')
+        plt.close(fig)
+        l = 1
+        real_images = []
+        while len(real_images) < y_dim:
+            if FLAGS.dataset == "mnist":
+                img, lab = mnist.train.next_batch(FLAGS.batch_size)
+            else:
+                img, lab = sess.run([images, labels])
+            for i in range(img.shape[0]):
+                if len(real_images) < y_dim+2:
+                    label = np.argmax(lab[i, :]).astype("int32")
+                    if label == l:
+                        real_images.append(img[i])
+        fig = plot(real_images, title="sample of real images for a fixed class")
+        file_name = FLAGS.dataset + "-REAL_IMAGES.jpg"
+        plt.savefig(image_dir_fixed_class + file_name, bbox_inches='tight', facecolor='#edededff')
+        plt.close(fig)
 
-
-with tf.device("/cpu:0"):
-    tf.train.start_queue_runners(sess=sess)
-with tf.device("/gpu:0"):
-    l = 0
-    while len(real_images) < y_dim:
-        if FLAGS.dataset == "mnist":
-            img, lab = mnist.train.next_batch(FLAGS.batch_size)
-        else:
-            img, lab = sess.run([images, labels])
-        for i in range(img.shape[0]):
-            label = np.argmax(lab[i, :]).astype("int32")
-            if label == l:
-                print "adding image for class %i" % l
-                real_images.append(img[i])
-                l += 1
-    print "Creating real image for comparison"
-    fig = plot(real_images)
-    file_name = FLAGS.dataset + "-REAL_IMAGES.jpg"
-    plt.savefig(image_dir + file_name, bbox_inches='tight')
-    plt.close(fig)
-
-    D_loss_sum = 0.
-    G_loss_sum = 0.
-    global_step = 0
-    for ep in tqdm(range(FLAGS.num_epochs)):
-        ep_time = time.time()
-        for it in tqdm(range(iter_per_epoch)):
-
-            if global_step % FLAGS.plot_freq == 0:
-                samples = sess.run(G_fixed)
-                fig = plot(samples, title="Generated samples for: "+FLAGS.experiment_name, iter=str(global_step).zfill(8))
-                file_name = FLAGS.dataset + "-ep-"+str(ep).zfill(3)+"-iter-" + str(it).zfill(7) + ".png"
-                plt.savefig(image_dir + file_name, bbox_inches='tight', transparent=False, facecolor='#edededff')
-                plt.close(fig)
-
-            for i in range(FLAGS.dis_per_iter):
-                if FLAGS.dataset == "mnist":
-                    x_mb, y_mb = mnist.train.next_batch(FLAGS.batch_size)
-                    feed_dict = {images: (x_mb.astype("float32") / 127.5) - 1., labels: y_mb}
-                if FLAGS.wasserstein:
-                    _, D_loss_curr, _ = sess.run([D_solver, D_loss, clip_D], feed_dict=feed_dict)
-                else:
-                    _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict=feed_dict)
-                D_loss_sum += D_loss_curr
-            for i in range(FLAGS.gen_per_iter):
-                _, G_loss_curr, summary = sess.run([G_solver, G_loss, merged_summary_op], feed_dict=feed_dict)
-                G_loss_sum += G_loss_curr
-            summary_writer.add_summary(summary, global_step)
-            if it % FLAGS.eval_freq == 0:
-                print '\nIter: {}'.format(it), 'D loss: {:.4}'.format(D_loss_sum/(FLAGS.dis_per_iter*FLAGS.eval_freq)),\
-                    'G_loss: {:.4}'.format(G_loss_sum / (FLAGS.gen_per_iter*FLAGS.eval_freq)) + "\r"
-                D_loss_sum = 0.
-                G_loss_sum = 0.
-            global_step += 1
-        print "Epoch ", ep, "finished in :", time.time()-ep_time, "seconds"
+        D_loss_sum = 0.
+        G_loss_sum = 0.
+        for ep in tqdm(range(FLAGS.num_epochs)):
+            ep_time = time.time()
+            for it in tqdm(range(iter_per_epoch)):
+                if sv.should_stop():
+                    break
+                cur_global_step = sess.run(global_step)
+                if cur_global_step % FLAGS.plot_freq == 0:
+                    file_name = FLAGS.dataset + "-step-" + str(cur_global_step).zfill(7) + ".png"
+                    samples_fixed, samples_meshgrid = sess.run([G_fixed, G_meshgrid])
+                    plot(samples_fixed, title="Iteration step: %s" % str(cur_global_step).zfill(8), grid=grid, file_dir=image_dir_all_classes + file_name)
+                    plot(samples_meshgrid, title="Iteration step: %s" % str(cur_global_step).zfill(8), file_dir=image_dir_fixed_class + file_name)
+                for i in range(FLAGS.dis_per_iter):
+                    if FLAGS.dataset == "mnist":
+                        x_mb, y_mb = mnist.train.next_batch(FLAGS.batch_size)
+                        feed_dict = {images: (x_mb.astype("float32") / 127.5) - 1., labels: y_mb}
+                    if FLAGS.wasserstein:
+                        _, D_loss_curr, _ = sess.run([D_solver, D_loss, clip_D], feed_dict=feed_dict)
+                    else:
+                        _, D_loss_curr = sess.run([D_solver, D_loss], feed_dict=feed_dict)
+                    D_loss_sum += D_loss_curr
+                for i in range(FLAGS.gen_per_iter):
+                    _, G_loss_curr, summary = sess.run([G_solver, G_loss, merged_summary_op], feed_dict=feed_dict)
+                    G_loss_sum += G_loss_curr
+                summary_writer.add_summary(summary, cur_global_step)
+                if it % FLAGS.eval_freq == 0:
+                    print '\nGlobal step: {}'.format(cur_global_step), 'D loss: {:.4}'.format(D_loss_sum/(FLAGS.dis_per_iter*FLAGS.eval_freq)),\
+                        'G_loss: {:.4}'.format(G_loss_sum / (FLAGS.gen_per_iter*FLAGS.eval_freq)) + "\r"
+                    D_loss_sum = 0.
+                    G_loss_sum = 0.
+                    saver.save(sess, sv.save_path, global_step=global_step)
+                sess.run(global_step_op)
+            print "Epoch ", ep, "finished in :", time.time()-ep_time, "seconds"
+        sv.stop()
